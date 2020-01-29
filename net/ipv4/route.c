@@ -2109,8 +2109,6 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	if (ipv4_is_multicast(saddr) || ipv4_is_lbcast(saddr))
 		goto martian_source;
 
-	res->fi = NULL;
-	res->table = NULL;
 	if (ipv4_is_lbcast(daddr) || (saddr == 0 && daddr == 0))
 		goto brd_input;
 
@@ -2155,7 +2153,11 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 		fl4.fl4_dport = 0;
 	}
 
-	err = fib_lookup(net, &fl4, res, 0);
+	if (res->table)
+		err = fib_table_lookup(res->table, &fl4, res, FIB_LOOKUP_NOREF);
+	else
+		err = fib_lookup(net, &fl4, res, 0);
+
 	if (err != 0) {
 		if (!IN_DEV_FORWARD(in_dev))
 			err = -EHOSTUNREACH;
@@ -2289,6 +2291,8 @@ int ip_route_input_noref(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 {
 	struct fib_result res;
 	int err;
+	res.fi = NULL;
+	res.table = NULL;
 
 	tos &= IPTOS_RT_MASK;
 	rcu_read_lock();
