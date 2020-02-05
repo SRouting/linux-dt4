@@ -151,6 +151,24 @@ static void advance_nextseg(struct ipv6_sr_hdr *srh, struct in6_addr *daddr)
 	*daddr = *addr;
 }
 
+static int seg6_lookup_nexthop_v4(struct sk_buff *skb, u32 tbl_id)
+{
+	struct net *net = dev_net(skb->dev);
+	struct fib_result res;
+	struct iphdr *iph;
+	__u8 tos;
+
+	iph = ip_hdr(skb);
+	tos = iph->tos & IPTOS_RT_MASK;
+	res.table = fib_get_table(net, tbl_id);
+	if (!res.table)
+		return -1;
+
+	skb_dst_drop(skb);
+	return ip_route_input_rcu(skb, iph->daddr,
+				  iph->saddr, 0, skb->dev, &res, true);
+}
+
 static int
 seg6_lookup_any_nexthop(struct sk_buff *skb, struct in6_addr *nhaddr,
 			u32 tbl_id, bool local_delivery)
@@ -401,6 +419,31 @@ drop:
 	return -EINVAL;
 }
 
+static int input_action_end_dt4(struct sk_buff *skb,
+				struct seg6_local_lwt *slwt)
+{
+	int err;
+
+	if (!decap_and_validate(skb, IPPROTO_IPIP))
+		goto drop;
+
+	if (!pskb_may_pull(skb, sizeof(struct iphdr)))
+		goto drop;
+
+	skb_set_transport_header(skb, sizeof(struct iphdr));
+
+	err = seg6_lookup_nexthop_v4(skb, slwt->table);
+
+	if (err)
+		goto drop;
+
+	return dst_input(skb);
+
+drop:
+	kfree_skb(skb);
+	return -EINVAL;
+}
+
 static int input_action_end_dt6(struct sk_buff *skb,
 				struct seg6_local_lwt *slwt)
 {
@@ -588,6 +631,11 @@ static struct seg6_action_desc seg6_action_table[] = {
 		.action		= SEG6_LOCAL_ACTION_END_DX4,
 		.attrs		= (1 << SEG6_LOCAL_NH4),
 		.input		= input_action_end_dx4,
+	},
+	{
+		.action		= SEG6_LOCAL_ACTION_END_DT4,
+		.attrs		= (1 << SEG6_LOCAL_TABLE),
+		.input		= input_action_end_dt4,
 	},
 	{
 		.action		= SEG6_LOCAL_ACTION_END_DT6,
