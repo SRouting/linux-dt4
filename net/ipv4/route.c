@@ -2077,7 +2077,7 @@ martian_source:
 
 static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 			       u8 tos, struct net_device *dev,
-			       struct fib_result *res)
+			       struct fib_result *res, bool tbl_known)
 {
 	struct in_device *in_dev = __in_dev_get_rcu(dev);
 	struct flow_keys *flkeys = NULL, _flkeys;
@@ -2109,8 +2109,6 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 	if (ipv4_is_multicast(saddr) || ipv4_is_lbcast(saddr))
 		goto martian_source;
 
-	res->fi = NULL;
-	res->table = NULL;
 	if (ipv4_is_lbcast(daddr) || (saddr == 0 && daddr == 0))
 		goto brd_input;
 
@@ -2155,7 +2153,14 @@ static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 		fl4.fl4_dport = 0;
 	}
 
-	err = fib_lookup(net, &fl4, res, 0);
+	if (!tbl_known) {
+		res->fi = NULL;
+		res->table = NULL;
+		err = fib_lookup(net, &fl4, res, 0);
+	} else {
+		err = fib_table_lookup(res->table, &fl4, res, FIB_LOOKUP_NOREF);
+	}
+
 	if (err != 0) {
 		if (!IN_DEV_FORWARD(in_dev))
 			err = -EHOSTUNREACH;
@@ -2292,7 +2297,7 @@ int ip_route_input_noref(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 
 	tos &= IPTOS_RT_MASK;
 	rcu_read_lock();
-	err = ip_route_input_rcu(skb, daddr, saddr, tos, dev, &res);
+	err = ip_route_input_rcu(skb, daddr, saddr, tos, dev, &res, false);
 	rcu_read_unlock();
 
 	return err;
@@ -2301,7 +2306,8 @@ EXPORT_SYMBOL(ip_route_input_noref);
 
 /* called with rcu_read_lock held */
 int ip_route_input_rcu(struct sk_buff *skb, __be32 daddr, __be32 saddr,
-		       u8 tos, struct net_device *dev, struct fib_result *res)
+		       u8 tos, struct net_device *dev, struct fib_result *res,
+		       bool tbl_known)
 {
 	/* Multicast recognition logic is moved from route cache to here.
 	   The problem was that too many Ethernet cards have broken/missing
@@ -2347,7 +2353,7 @@ int ip_route_input_rcu(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 		return err;
 	}
 
-	return ip_route_input_slow(skb, daddr, saddr, tos, dev, res);
+	return ip_route_input_slow(skb, daddr, saddr, tos, dev, res, tbl_known);
 }
 
 /* called with rcu_read_lock() */
@@ -3192,7 +3198,7 @@ static int inet_rtm_getroute(struct sk_buff *in_skb, struct nlmsghdr *nlh,
 		skb->dev	= dev;
 		skb->mark	= mark;
 		err = ip_route_input_rcu(skb, dst, src, rtm->rtm_tos,
-					 dev, &res);
+					 dev, &res, false);
 
 		rt = skb_rtable(skb);
 		if (err == 0 && rt->dst.error)
